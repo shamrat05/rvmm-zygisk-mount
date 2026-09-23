@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <vector>
 
 #include "zygisk.hpp"
 
@@ -15,20 +16,44 @@
 #define LOGD(fmt, ...) \
     __android_log_print(ANDROID_LOG_DEBUG, "rvmm-zygisk-mount", "[%d] " fmt, __LINE__, ##__VA_ARGS__)
 
+static bool readFull(int fd, void* data, size_t size) {
+    auto* ptr = static_cast<char*>(data);
+    size_t done = 0;
+    while (done < size) {
+        ssize_t ret = read(fd, ptr + done, size - done);
+        if (ret < 0 && errno == EINTR) continue;
+        if (ret <= 0) return false;
+        done += static_cast<size_t>(ret);
+    }
+    return true;
+}
+
+static bool writeFull(int fd, const void* data, size_t size) {
+    const auto* ptr = static_cast<const char*>(data);
+    size_t done = 0;
+    while (done < size) {
+        ssize_t ret = write(fd, ptr + done, size - done);
+        if (ret < 0 && errno == EINTR) continue;
+        if (ret <= 0) return false;
+        done += static_cast<size_t>(ret);
+    }
+    return true;
+}
+
 static bool sendProcInfo(int fd, const char* proc) {
     pid_t pid = getpid();
-    if (write(fd, &pid, sizeof(pid)) <= 0) {
+    if (!writeFull(fd, &pid, sizeof(pid))) {
         LOGD("ERROR write: %s", strerror(errno));
         return false;
     }
 
     unsigned int proc_len = strlen(proc) + 1;
-    if (write(fd, &proc_len, sizeof(proc_len)) <= 0) {
+    if (!writeFull(fd, &proc_len, sizeof(proc_len))) {
         LOGD("ERROR write: %s", strerror(errno));
         return false;
     }
 
-    if (write(fd, proc, proc_len) <= 0) {
+    if (!writeFull(fd, proc, proc_len)) {
         LOGD("ERROR write: %s", strerror(errno));
         return false;
     }
@@ -50,11 +75,19 @@ class RVMMZygiskMount : public zygisk::ModuleBase {
 
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
         const char* proc = env->GetStringUTFChars(args->nice_name, NULL);
+        if (!proc) {
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
 
         int fd = api->connectCompanion();
-        sendProcInfo(fd, proc);
+        if (fd < 0) {
+            LOGD("connectCompanion failed: %s", strerror(errno));
+        } else if (!sendProcInfo(fd, proc)) {
+            LOGD("failed to send process info for %s", proc);
+        }
 
-        close(fd);
+        if (fd >= 0) close(fd);
         env->ReleaseStringUTFChars(args->nice_name, proc);
         api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
     }
@@ -160,20 +193,20 @@ static bool injectMount(const char* src, const char* dst, pid_t pid) {
     return true;
 }
 
-static bool receiveProcInfo(int fd, const char** src, const char** dst, pid_t* pid) {
-    if (read(fd, pid, sizeof(*pid)) <= 0) {
+static bool receiveProcInfo(int fd, char** src, char** dst, pid_t* pid) {
+    if (!readFull(fd, pid, sizeof(*pid))) {
         LOGD("ERROR read: %s", strerror(errno));
         return false;
     }
 
     unsigned int proc_len;
-    if (read(fd, &proc_len, sizeof(proc_len)) <= 0) {
+    if (!readFull(fd, &proc_len, sizeof(proc_len)) || proc_len == 0 || proc_len > 4096) {
         LOGD("ERROR read: %s", strerror(errno));
         return false;
     }
 
-    char proc[proc_len];
-    if (read(fd, proc, proc_len) <= 0) {
+    std::vector<char> proc(proc_len);
+    if (!readFull(fd, proc.data(), proc_len)) {
         LOGD("ERROR read: %s", strerror(errno));
         return false;
     }
@@ -181,26 +214,44 @@ static bool receiveProcInfo(int fd, const char** src, const char** dst, pid_t* p
     char* procs_map = readFileToNullStr("/data/adb/modules/rvmm-zygisk-mount/procs_map");
     if (procs_map == nullptr) return false;
 
-    bool r = getMountSrcDst(procs_map, proc, src, dst);
+    const char *mapped_src, *mapped_dst;
+    bool r = getMountSrcDst(procs_map, proc.data(), &mapped_src, &mapped_dst);
+    if (r) {
+        *src = strdup(mapped_src);
+        *dst = strdup(mapped_dst);
+        if (!*src || !*dst) {
+            free(*src);
+            free(*dst);
+            *src = nullptr;
+            *dst = nullptr;
+            r = false;
+        }
+    }
     free(procs_map);
     if (!r) return false;
 
-    LOGD("%s: %s -> %s", proc, *src, *dst);
+    LOGD("%s: %s -> %s", proc.data(), *src, *dst);
     return true;
 }
 
 static void companionHandler(int fd) {
-    const char *src, *dst;
+    char *src = nullptr, *dst = nullptr;
     pid_t pid;
-    if (!receiveProcInfo(fd, &src, &dst, &pid)) return;
+    if (!receiveProcInfo(fd, &src, &dst, &pid)) {
+        LOGD("invalid or incomplete companion request");
+        return;
+    }
 
     pid_t child = fork();
     if (child == 0) {
-        injectMount(src, dst, pid);
-        exit(0);
+        bool ok = injectMount(src, dst, pid);
+        LOGD("mount %s -> %s for pid=%d: %s", src, dst, pid, ok ? "success" : strerror(errno));
+        _exit(ok ? 0 : 1);
     } else if (child == -1) {
         LOGD("ERROR fork: %s", strerror(errno));
     }
+    free(src);
+    free(dst);
 }
 
 REGISTER_ZYGISK_MODULE(RVMMZygiskMount)
