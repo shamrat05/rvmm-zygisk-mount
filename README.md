@@ -2,7 +2,7 @@
 
 Injects the mounts at the pre app specialization with Zygisk (for [revanced-magisk-module](https://github.com/j-hc/revanced-magisk-module)).
 
-The shamrat05 fork's v12 fixes a use-after-free in the companion mount handoff, handles partial socket reads and writes, and skips the null process-name callback that Zygisk Next can deliver during internal specialization. It is intended to work with Zygisk Next's Magisk Zygisk API compatibility layer without a boot-time respawn loop.
+The shamrat05 fork's v13 fixes a use-after-free in the companion mount handoff, handles partial socket reads and writes, skips the null process-name callback that Zygisk Next can deliver during internal specialization, and statically links libc++ so the companion has no missing shared-library dependency. It is intended to work with Zygisk Next's Magisk Zygisk API compatibility layer without a boot-time respawn loop.
 
 Fixes problems such as,
 - "Reflash needed" error after reboots

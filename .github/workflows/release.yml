@@ -54,9 +54,13 @@ jobs:
             mkdir -p "module/zygisk/$abi"
             "$compiler" \
               -std=c++17 -O2 -fPIC -fvisibility=hidden -ffunction-sections -fdata-sections \
-              -Izygisk/jni zygisk/jni/module.cpp -shared -Wl,--gc-sections -llog \
+              -static-libstdc++ -Izygisk/jni zygisk/jni/module.cpp -shared -Wl,--gc-sections -llog \
               -o "module/zygisk/$abi.so"
             file "module/zygisk/$abi.so"
+            if readelf -d "module/zygisk/$abi.so" | grep -q 'libc++_shared.so'; then
+              echo "unexpected dynamic libc++ dependency in $abi" >&2
+              exit 1
+            fi
           done
 
       - name: Package module

@@ -1,6 +1,6 @@
 {
-	"version": "v12",
-	"versionCode": 12,
-	"zipUrl": "https://github.com/shamrat05/rvmm-zygisk-mount/releases/latest/download/rvmm-zygisk-mount-v12.zip",
+	"version": "v13",
+	"versionCode": 13,
+	"zipUrl": "https://github.com/shamrat05/rvmm-zygisk-mount/releases/latest/download/rvmm-zygisk-mount-v13.zip",
 	"changelog": "https://raw.githubusercontent.com/shamrat05/rvmm-zygisk-mount/master/README.md"
 }
