@@ -4,5 +4,7 @@ policy
 *.zip
 *.so
 *.log
+.pytest_cache/
+__pycache__/
 .clangd
 module/bin/*/ksu_profile

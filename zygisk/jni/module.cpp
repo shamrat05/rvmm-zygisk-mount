@@ -74,6 +74,15 @@ class RVMMZygiskMount : public zygisk::ModuleBase {
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
+        // Zygisk Next can invoke app specialization with no process name for
+        // short-lived/internal processes. Calling GetStringUTFChars with a
+        // null jstring aborts in Android's JNI implementation ("string
+        // pointer is null"), which otherwise causes a respawn loop at boot.
+        if (api == nullptr || env == nullptr || args == nullptr || args->nice_name == nullptr) {
+            if (api != nullptr) api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+
         const char* proc = env->GetStringUTFChars(args->nice_name, NULL);
         if (!proc) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);

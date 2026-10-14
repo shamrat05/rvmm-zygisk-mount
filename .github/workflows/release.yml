@@ -1,0 +1,74 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: sdkmanager "ndk;${NDK_VERSION}"
+
+      - name: Run source safety tests
+        run: python3 -m unittest discover -s tests -p 'test*.py'
+
+      - name: Build Zygisk libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkroot="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          ndk="$sdkroot/ndk/$NDK_VERSION"
+          declare -A compilers=(
+            [arm64-v8a]="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
+            [armeabi-v7a]="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
+            [x86]="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android24-clang++"
+            [x86_64]="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang++"
+          )
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            compiler="${compilers[$abi]}"
+            test -x "$compiler"
+            mkdir -p "module/zygisk/$abi"
+            "$compiler" \
+              -std=c++17 -O2 -fPIC -fvisibility=hidden -ffunction-sections -fdata-sections \
+              -Izygisk/jni zygisk/jni/module.cpp -shared -Wl,--gc-sections -llog \
+              -o "module/zygisk/$abi.so"
+            file "module/zygisk/$abi.so"
+          done
+
+      - name: Package module
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 0755 module/customize.sh module/post-fs-data.sh module/service.sh module/util.sh
+          chmod 0644 module/module.prop
+          test "$(grep -E '^version=' module/module.prop | cut -d= -f2)" = "${GITHUB_REF_NAME}"
+          (cd module && zip -X -r -9 "../rvmm-zygisk-mount-${GITHUB_REF_NAME}.zip" .)
+          sha256sum "rvmm-zygisk-mount-${GITHUB_REF_NAME}.zip" > "rvmm-zygisk-mount-${GITHUB_REF_NAME}.sha256"
+          unzip -t "rvmm-zygisk-mount-${GITHUB_REF_NAME}.zip"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" "rvmm-zygisk-mount-${GITHUB_REF_NAME}.zip" "rvmm-zygisk-mount-${GITHUB_REF_NAME}.sha256" --repo "${GITHUB_REPOSITORY}" --title "rvmm-zygisk-mount ${GITHUB_REF_NAME}" --generate-notes
